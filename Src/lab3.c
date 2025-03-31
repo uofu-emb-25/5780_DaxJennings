@@ -97,6 +97,7 @@ void Configure_PC6_PC7_AlternateFunction(void) {
     GPIOC->MODER |= (GPIO_MODER_MODER6_1 | GPIO_MODER_MODER7_1); // Set to alternate function mode
 
     // Set the Alternate Function (AF0) for PC6 and PC7 (Timer 3)
+    // Maybe should be AFR[1]?
     GPIOC->AFR[0] &= ~((0xF << (6 * 4)) | (0xF << (7 * 4)));  // Clear current AF settings
     GPIOC->AFR[0] |= ((0 << (6 * 4)) | (0 << (7 * 4))); // Set AF0 for PC6 and PC7 (AF0 corresponds to Timer 3)
 }
