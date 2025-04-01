@@ -3,6 +3,14 @@
 #include <assert.h>
 #include <stdio.h>
 
+// Sine wave (32 samples, 8-bit values)
+const uint8_t sine_wave[32] = {
+    128, 152, 176, 198, 217, 233, 244, 251,
+    253, 251, 244, 233, 217, 198, 176, 152,
+    128, 104, 80, 58, 39, 23, 12, 5,
+    3, 5, 12, 23, 39, 58, 80, 104
+};
+
 int lab6_main(void) {
     // 6.1.1. Initialize the LED pins to output.
     SystemClock_Config(); //Configure the system clock
@@ -46,19 +54,51 @@ int lab6_main(void) {
     while (!(ADC1->ISR & ADC_ISR_ADRDY)); // Wait until ADC is ready
     ADC1->CR |= ADC_CR_ADSTART; // Start ADC conversion
 
-    // 6.1.7. In the main application loop, read the ADC data register and turn on/off LEDs depending on the value.
-    // • Use four increasing threshold values, each LED should have a minimum ADC value/- voltage to turn on.
-    // • As the voltage on the input pin increases, the LEDs should light one-by-one.
-    // • If the pin voltage decreases below the threshold for a LED, it should turn off.
+
+    // 6.2.1. Select a GPIO pin to use as the DAC output (PA4 : DAC_OUT1)
+    // Configure PA4 as analog mode, no pull-up/down resistors
+    RCC->AHBENR |= (1 << 17); // Enable GPIOA clock
+    GPIOA->MODER |= (1 << 8); // Set PA4 to analog mode (MODER4 = 11)
+    GPIOA->MODER |= (1 << 9);
+    GPIOA->PUPDR &= ~(1 << 8); // No pull-up/down resistors
+    GPIOA->PUPDR &= ~(1 << 9);
+    
+    // 6.2.2. Set the used DAC channel to software trigger mode
+    RCC->APB1ENR |= (1 << 29); // Enable DAC clock
+    //DAC->CR &= ~(7 << 3); // Disable hardware trigger (TSEL1 = 000)
+    DAC->CR |= (1 << 3); // set to software trigger mode
+    DAC->CR |= (1 << 4);
+    DAC->CR |= (1 << 5);
+    DAC->CR |= (1 << 2);  // Enable software trigger (TEN1 = 1)
+    
+    // 6.2.3. Enable the used DAC channel
+    DAC->CR |= (1 << 0); // Enable DAC channel 1 (EN1 = 1)
+    
+    // 6.2.4. Copy one of the wave-tables into the application (sine_wave[] array above)
+
+    
+    uint8_t index = 0;
     while (1) {
+        // 6.1.7. In the main application loop, read the ADC data register and turn on/off LEDs depending on the value.
+        // • Use four increasing threshold values, each LED should have a minimum ADC value/- voltage to turn on.
+        // • As the voltage on the input pin increases, the LEDs should light one-by-one.
+        // • If the pin voltage decreases below the threshold for a LED, it should turn off.
         while (!(ADC1->ISR & ADC_ISR_EOC)); // Wait for ADC conversion to complete
         uint8_t adc_value = (uint8_t)(ADC1->DR & 0xFF); // Read 8-bit ADC value
-
         // LED control based on threshold values
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, (adc_value > 64) ? GPIO_PIN_SET : GPIO_PIN_RESET);
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, (adc_value > 128) ? GPIO_PIN_SET : GPIO_PIN_RESET);
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, (adc_value > 192) ? GPIO_PIN_SET : GPIO_PIN_RESET);
         HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, (adc_value > 240) ? GPIO_PIN_SET : GPIO_PIN_RESET);
+
+        // 6.2.5. In the main application loop, write the next value from the wave-table to the DAC
+        DAC->DHR8R1 = sine_wave[index]; // Write next waveform value to DAC register
+        // debug; hard coding value
+        //DAC->DHR8R1 = 127; // Set output to mid-range (~1.65V for 3.3V supply) 
+        DAC->SWTRIGR |= DAC_SWTRIGR_SWTRIG1; // Trigger DAC channel 1
+        index = (index + 1) % 32; // Increment index, wrap around after 32 samples
+        // 6.2.6. Use a 1ms delay between updates
+        HAL_Delay(1);
     }
 
 /*
