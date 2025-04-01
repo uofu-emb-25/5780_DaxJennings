@@ -76,6 +76,13 @@ void SysTick_Handler(void)
 {
     HAL_IncTick();
 
+    #if defined(LAB7)
+    Lab7_Systick_Callback();
+    #endif
+/* USER CODE END SysTick_IRQn 0 */
+/* USER CODE BEGIN SysTick_IRQn 1 */
+/* USER CODE END SysTick_IRQn 1 */
+
     // Commented out to stop blue flashing from lab 2.
     // static uint32_t tick_counter = 0;
     // tick_counter++; // Increment every millisecond
@@ -84,7 +91,6 @@ void SysTick_Handler(void)
     //     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_7); // Toggle LED state
     //     tick_counter = 0; // Reset counter
     // }
-
     //My_HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET); // Start PC9 (Green) high
  
 }
