@@ -19,6 +19,7 @@ void motor_init(void) {
     pwm_init();
     encoder_init();
     ADC_init();
+    
 }
 
 // Sets up the PWM and direction signals to drive the H-Bridge
@@ -138,7 +139,7 @@ void TIM6_DAC_IRQHandler(void) {
     
     // Call the PI update function
     PI_update();
-    log_data();
+    //log_data(); // comment this out if not logging?
     TIM6->SR &= ~TIM_SR_UIF;        // Acknowledge the interrupt
 }
 
@@ -183,6 +184,7 @@ void PI_update(void) {
      */
     
     /// TODO: calculate error signal and write to "error" variable
+    error = target_rpm * (2.4) - motor_speed; // 3rd item is constant you can change to tune things
     
     /* Hint: Remember that your calculated motor speed may not be directly in RPM!
      *       You will need to convert the target or encoder speeds to the same units.
@@ -192,9 +194,11 @@ void PI_update(void) {
     
     
     /// TODO: Calculate integral portion of PI controller, write to "error_integral" variable
-    
+    error_integral += error * Ki;
     /// TODO: Clamp the value of the integral to a limited positive range
-    
+    if (error_integral > 3200) error_integral = 3200;
+    if (error_integral < 0) error_integral = 0;
+
     /* Hint: The value clamp is needed to prevent excessive "windup" in the integral.
      *       You'll read more about this for the post-lab. The exact value is arbitrary
      *       but affects the PI tuning.
@@ -202,8 +206,7 @@ void PI_update(void) {
      */
     
     /// TODO: Calculate proportional portion, add integral and write to "output" variable
-    
-    int16_t output = 0; // Change this!
+    int16_t output = (Kp * error) +  error_integral; //int16_t output = 0; // Change this!
     
     /* Because the calculated values for the PI controller are significantly larger than 
      * the allowable range for duty cycle, you'll need to divide the result down into 
@@ -221,11 +224,13 @@ void PI_update(void) {
      * required for tuning.
      */
 
-     /// TODO: Divide the output into the proper range for output adjustment
-     
-     /// TODO: Clamp the output value between 0 and 100 
+    /// TODO: Divide the output into the proper range for output adjustment
+    output = output >> 5; // Shift to divide by 32
+    /// TODO: Clamp the output value between 0 and 100 
+    if (output > 100) output = 100;
+    if (output < 0) output = 0;
     
-    pwm_setDutyCycle(output);
+    pwm_setDutyCycle((uint8_t)output);
     duty_cycle = output;            // For debug viewing
 
     // Read the ADC value for current monitoring, actual conversion into meaningful units 
