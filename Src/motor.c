@@ -5,6 +5,7 @@
 #include "motor.h"
 #include "SEGGER_RTT.h"
 
+
 volatile int16_t error_integral = 0;    // Integrated error signal
 volatile uint8_t duty_cycle = 0;    	// Output PWM duty cycle
 volatile int16_t target_rpm = 0;    	// Desired speed target
@@ -14,12 +15,21 @@ volatile int16_t error = 0;         	// Speed error signal
 volatile uint8_t Kp = 1;            	// Proportional gain
 volatile uint8_t Ki = 1;            	// Integral gain
 
+// Added from canvas announcement
+static uint8_t buf0[1024];
+static uint8_t buf1[1024];
+static uint8_t buf2[1024];
+
 // Sets up the entire motor drive system
 void motor_init(void) {
     pwm_init();
     encoder_init();
     ADC_init();
     
+    // Added from canvas announcment
+    SEGGER_RTT_ConfigUpBuffer(0, "", buf0, 1024, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+    SEGGER_RTT_ConfigUpBuffer(1, "", buf1, 1024, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+    SEGGER_RTT_ConfigUpBuffer(2, "", buf2, 1024, SEGGER_RTT_MODE_NO_BLOCK_SKIP);
 }
 
 // Sets up the PWM and direction signals to drive the H-Bridge
@@ -184,7 +194,7 @@ void PI_update(void) {
      */
     
     /// TODO: calculate error signal and write to "error" variable
-    error = target_rpm * (2.4) - motor_speed; // 3rd item is constant you can change to tune things
+    error = target_rpm * (2.4) - motor_speed; // 2nd item is constant you can change to tune things
     
     /* Hint: Remember that your calculated motor speed may not be directly in RPM!
      *       You will need to convert the target or encoder speeds to the same units.
