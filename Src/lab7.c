@@ -5,6 +5,9 @@
 #include "motor.h"
 #include "SEGGER_RTT.h"
 
+#include <stdarg.h>
+#include <stdio.h>
+
 /* -------------------------------------------------------------------------------------------------------------
  *  Global Variable Declarations
  *  -------------------------------------------------------------------------------------------------------------
@@ -15,6 +18,27 @@ volatile uint32_t debouncer;
  *  Miscellaneous Core Functions
  *  -------------------------------------------------------------------------------------------------------------
  */
+
+ void USART_Transmitt(char data) {
+    // Wait until the Transmit Data Register Empty (TXE) flag is set
+    while (!(USART3->ISR & USART_ISR_TXE)){}
+    
+    // Write the character to the USART transmit register
+    USART3->TDR = data;
+}
+ void USART_Print(const char *str) {
+    while (*str) {
+        USART_Transmitt(*str++);
+    }
+}
+void USART_Printf(const char *fmt, ...) {
+    char buf[100];  // Adjust size if needed
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    USART_Print(buf);
+}
 
 void LED_init(void) {
     // Initialize PC8 and PC9 for LED's
@@ -81,17 +105,47 @@ void Lab7_Systick_Callback(void) {
 volatile uint32_t encoder_count = 0;
 
 int lab7_main(void) {
+    // Code from Lab4 to initialize UART
+    HAL_Init(); // Reset of all peripherals, init the Flash and Systick
+    // Enable USART3 clock
+    RCC->APB1ENR |= RCC_APB1ENR_USART3EN;
+    RCC->AHBENR |= RCC_AHBENR_GPIOCEN;  // Enable GPIOC clock
+    // Set up a configuration struct to pass to the initialization function
+    GPIO_InitTypeDef initStr = {
+        GPIO_PIN_4 | GPIO_PIN_5, // Pins for TX and RX
+        GPIO_MODE_OUTPUT_PP,
+        GPIO_SPEED_FREQ_LOW,
+        GPIO_NOPULL,
+        0x1
+    };
+    My_HAL_GPIO_Init(GPIOC, &initStr); // Initialize pins
+    // Set baud rate for 115200 bits/second (assuming PCLK1 = HCLK)
+    USART3->BRR = HAL_RCC_GetPCLK1Freq() / 115200;
+    // Enable USART3 transmitter, receiver, and USART itself
+    USART3->CR1 |= USART_CR1_TE | USART_CR1_RE | USART_CR1_UE | USART_CR1_RXNEIE;
+    // Debug: Check if USART3 is enabled
+    if (! ((USART3->CR1 & USART_CR1_TE) | (USART3->CR1 & USART_CR1_RE) | (USART3->CR1 & USART_CR1_UE))) {
+        HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET); // Turn on blue LED if USART3 is not enabled
+        while (1); // Halt execution if USART3 is not enabled
+    }
+    NVIC_SetPriority(USART3_4_IRQn, 1);
+    NVIC_EnableIRQ(USART3_4_IRQn);
+
 
     debouncer = 0;                          // Initialize global variables
     HAL_Init();                             // Initialize HAL internals
     LED_init();                             // Initialize LED's
     button_init();                          // Initialize button
-//SEE
     motor_init();                           // Initialize motor code
 
     while (1) {
         GPIOC->ODR ^= GPIO_ODR_9;           // Toggle green LED (heartbeat)
         encoder_count = TIM2->CNT;
+
+        // Print values over UART
+        //USART_Printf("DC=%lu, TRPM=%lu, MS=%lu\r\n", duty_cycle, target_rpm, motor_speed);
+        USART_Printf("%lu,%lu,%lu\r\n", duty_cycle, target_rpm, motor_speed);
+
         HAL_Delay(128);                      // Delay 1/8 second
     }
 }
