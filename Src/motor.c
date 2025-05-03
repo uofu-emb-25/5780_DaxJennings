@@ -12,8 +12,8 @@ volatile int16_t target_rpm = 0;    	// Desired speed target
 volatile int16_t motor_speed = 0;   	// Measured motor speed
 volatile int8_t adc_value = 0;      	// ADC measured motor current
 volatile int16_t error = 0;         	// Speed error signal
-volatile uint8_t Kp = 3;            	// Proportional gain
-volatile uint8_t Ki = 0.2;            	// Integral gain
+volatile uint8_t Kp = 13;            	// Proportional gain
+volatile uint8_t Ki = 9;            	// Integral gain
 
 // Added from canvas announcement
 static uint8_t buf0[1024];

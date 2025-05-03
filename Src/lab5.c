@@ -1,143 +1,168 @@
-#include <stm32f0xx_hal.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include "main.h"
-#include <assert.h>
-#include <stdio.h>
+#include "hal_gpio.h"
+#include <stm32f0xx_hal.h>
 
+// Gyroscope configuration constants
+uint8_t GYRO_ADDRESS = 0x69;
+uint8_t GYRO_WHOAMI_REG = 0x0F;
+uint8_t GYRO_WHOAMI_EXPECTED = 0xD4;
+
+void SystemClock_Config(void);
+
+// Light up exactly one LED based on GPIO position
+static inline void activateLED(uint32_t pinPosition) {
+    GPIOC->ODR = (GPIOC->ODR & ~((1 << 6) | (1 << 7) | (1 << 8) | (1 << 9))) | (1 << pinPosition);
+}
+
+// Check for I2C transfer status or error (NACK)
+int waitForI2CFlag(int targetFlagBit) {
+    while (!(I2C2->ISR & (1 << 4)) && !(I2C2->ISR & (1 << targetFlagBit))) {}
+    if (I2C2->ISR & (1 << 4)) {
+        // NACK received — turn on red LED to indicate error
+        GPIOC->ODR |= (1 << 6);
+        return 0;
+    }
+    return 1;
+}
+
+// Perform I2C read/write transaction with gyroscope
+void gyroscopeTransaction(int deviceAddress, int byteCount, int *dataBuffer, int isRead, int registerAddress) {
+    const uint32_t NUM_BYTES_POS = 16;
+    const uint32_t SLAVE_ADDR_POS = 1;
+    const uint32_t AUTO_INCREMENT = 0x80;
+
+    // Clear I2C2 CR2 fields before new transaction
+    I2C2->CR2 &= ~((0xFF << NUM_BYTES_POS) | 0x3FF | (1 << 10));
+
+    if (isRead) {
+        // Read: First phase just sends the register address
+        I2C2->CR2 |= (1 << NUM_BYTES_POS) | (deviceAddress << SLAVE_ADDR_POS);
+    } else {
+        // Write: Send register address + data
+        I2C2->CR2 |= ((byteCount + 1) << NUM_BYTES_POS) | (deviceAddress << SLAVE_ADDR_POS);
+    }
+
+    // Start transmission
+    I2C2->CR2 |= (1 << 13);
+
+    if (waitForI2CFlag(1)) {  // Wait for TXIS
+        I2C2->TXDR = registerAddress | ((byteCount > 1) ? AUTO_INCREMENT : 0);
+
+        if (isRead) {
+            while (!(I2C2->ISR & (1 << 6))) {}  // Wait for transfer complete
+
+            // Reconfigure for reading
+            I2C2->CR2 &= ~((0xFF << NUM_BYTES_POS) | 0x3FF);
+            I2C2->CR2 |= (byteCount << NUM_BYTES_POS) | (deviceAddress << SLAVE_ADDR_POS) | (1 << 10);
+            I2C2->CR2 |= (1 << 13);  // Restart
+
+            for (int i = 0; i < byteCount; i++) {
+                while (!waitForI2CFlag(2)) {}
+                dataBuffer[i] = I2C2->RXDR;
+            }
+        } else {
+            for (int i = 0; i < byteCount; i++) {
+                while (!waitForI2CFlag(1)) {}
+                I2C2->TXDR = dataBuffer[i];
+            }
+        }
+    }
+
+    while (!(I2C2->ISR & (1 << 6)));  // Wait for STOP condition
+    I2C2->CR2 |= (1 << 14);           // Send STOP
+}
+
+// Main lab function
 int lab5_main(void) {
-    HAL_Init(); // Reset of all peripherals, init the Flash and Systick
-    SystemClock_Config(); //Configure the system clock
+    HAL_Init();
+    SystemClock_Config();
 
-    My_HAL_RCC_GPIOC_CLK_ENABLE(); // Enable the GPIOC clock in the RCC
-    // Set up a configuration struct to pass to the initialization function
-    GPIO_InitTypeDef initStr = {GPIO_PIN_6 | GPIO_PIN_7 | GPIO_PIN_8 | GPIO_PIN_9,
-        GPIO_MODE_OUTPUT_PP,
-        GPIO_SPEED_FREQ_LOW,
-        GPIO_NOPULL};
-    HAL_GPIO_Init(GPIOC, &initStr); // Initialize pins PC6, PC7, PC8 & PC9
-    //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_SET);
-    //HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_8, GPIO_PIN_SET);
-    HAL_GPIO_WritePin(GPIOC, GPIO_PIN_9, GPIO_PIN_SET);
+    // Enable peripheral clocks for GPIO and I2C
+    RCC->AHBENR |= RCC_AHBENR_GPIOBEN | RCC_AHBENR_GPIOCEN;
+    RCC->APB1ENR |= RCC_APB1ENR_I2C2EN;
 
+    // Configure PC6-PC9 as LED outputs (Red, Blue, Orange, Green)
+    GPIOC->MODER |= (1 << 12) | (1 << 14) | (1 << 16) | (1 << 18);
 
-    //5.2---------------------------------------------------------------------------------------
-    // 5.2.1 Enable GPIOB and GPIOC in the RCC.
-        RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
-        RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
-    // 5.2.2 Set PB11 to alternate function mode, open-drain output type, and select I2C2_SDA as its alternate function
-        // Set PB11 to alternate function mode
-        //try something else GPIOB->MODER &= ~(GPIO_MODER_MODER11); // (Clear bit 0)
-        GPIOB->MODER &= ~(1 << 22); // (Clear bit 22)
-        //try something else GPIOB->MODER |= (GPIO_MODER_MODER11_1); // (Set bit 1)
-        GPIOB->MODER |= (1 << 23); // (Set bit 23)
-        // Open-drain output type
-        GPIOB->OTYPER |= (1 << 11); // Sets the 11 bit in the GPIOB_OTYPER register
-        // Select I2C2_SDA as alternate function
+    // Configure PB11 (SDA)
+    GPIOB->MODER |= (1 << 23);
+    GPIOB->MODER &= ~(1 << 22);
+    GPIOB->OTYPER |= (1 << 11);
+    GPIOB->AFR[1] |= (1 << 12);
 
-        GPIOB->AFR[1] &= ~(0xF << ((11 - 8) * 4));  // Use AFR[1] for PB11
-        GPIOB->AFR[1] |= (1 << ((11 - 8) * 4)); // AF1 for PB11
+    // Configure PB13 (SCL)
+    GPIOB->MODER |= (1 << 27);
+    GPIOB->MODER &= ~(1 << 26);
+    GPIOB->OTYPER |= (1 << 13);
+    GPIOB->AFR[1] |= (1 << 20);
+    GPIOB->AFR[1] &= ~(1 << 21);
+    GPIOB->AFR[1] |= (1 << 22);
+    GPIOB->AFR[1] &= ~(1 << 23);
 
-    // 5.2.3 Set PB13 to alternate function mode, open-drain output type, and select I2C2_SCL as its alternate function.
-        // Set PB13 to alternate function mode
-        //try something else GPIOB->MODER &= ~(GPIO_MODER_MODER13); // (Clear bit 0)
-        GPIOB->MODER &= ~(1 << 26); // (Clear bit 26)
-        //try something else GPIOB->MODER |= (GPIO_MODER_MODER13_1); // (Set bit 1)
-        GPIOB->MODER |= (1 << 27); // (Set bit 27)
-        // Open-drain output type
-        GPIOB->OTYPER |= (1 << 13); // (Set bit 13)
-        // Select I2C2_SCL as alternate function
+    // Configure PB14 (output, high)
+    GPIOB->MODER &= ~(1 << 29);
+    GPIOB->MODER |= (1 << 28);
+    GPIOB->OTYPER &= ~(1 << 14);
+    GPIOB->ODR |= (1 << 14);
 
-        GPIOB->AFR[1] &= ~(0xF << ((13 - 8) * 4)); // Use AFR[1] for PB13
-        GPIOB->AFR[1] |= (5 << ((13 - 8) * 4)); // AF5 for PB13
+    // Configure PC0 as push-pull output (mode select high)
+    GPIOC->MODER |= (1 << 0);
+    GPIOC->ODR |= (1 << 0);
 
-    // 5.2.4 Set PB14 to output mode, push-pull output type, and initialize/set the pin high.
-        // Set PB14 to output mode
-        GPIOB->MODER |= (1 << 28); // (Set bit 28)
-        GPIOB->MODER &= ~(1 << 29); // (Clear bit 29)
-        // Push-pull output type
-        GPIOB->OTYPER &= ~(1 << 14); // (Clear bit 14)
-        // Set pin high
-        My_HAL_GPIO_WritePin(GPIOB, GPIO_PIN_14, GPIO_PIN_SET); // Start PB14 high
-    // 5.2.5 Set PC0 to output mode, push-pull output type, and initialize/set the pin high.
-        // Set PC0 to output mode
-        GPIOC->MODER |= (1 << 0); // (Set bit 0)
-        GPIOC->MODER &= ~(1 << 1); // (Clear bit 1)
-        // Push-pull output type
-        GPIOC->OTYPER &= ~(1 << 0); // (Clear bit 0)
-        // Set pin high
-        My_HAL_GPIO_WritePin(GPIOC, GPIO_PIN_0, GPIO_PIN_SET); // Start PC0 high
-    //------------------------------------------------------------------------------------------
+    // Set up I2C2 timing
+    I2C2->TIMINGR = 0;
+    I2C2->TIMINGR |= 0x13;
+    I2C2->TIMINGR |= (0xF << 8);
+    I2C2->TIMINGR |= (0x2 << 16);
+    I2C2->TIMINGR |= (0x4 << 20);
+    I2C2->TIMINGR |= (1 << 28);
 
+    // Enable I2C2
+    I2C2->CR1 |= (1 << 0);
 
-    //5.3---------------------------------------------------------------------------------------
-    // 5.3.1 Enable the I2C2 peripheral in the RCC.
-        RCC->APB1ENR |= RCC_APB1ENR_I2C2EN;
-    // 5.3.2 Set the parameters in the TIMINGR register to use 100 kHz standard-mode I2C.
-        // PRESC to 1
-        I2C2->TIMINGR |= (1 << 28); // (Set bit 28)
-        // SCLL to 0x13
-        I2C2->TIMINGR |= (1 << 0) | (1 << 1) | (1 << 4); // (Set bits 0, 1, and 4)
-        // SCLH to 0xF
-        I2C2->TIMINGR |= (1 << 8) | (1 << 9) | (1 << 10) | (1 << 11); // (Set bits 8-11)
-        // SDADEL to 0x2
-        I2C2->TIMINGR |= (1 << 17); // (Set bit 17)
-        // SCLDEL to 0x4
-        I2C2->TIMINGR |= (1 << 22); // (Set bit 22)
-    // 5.3.3 Enable the I2C peripheral using the PE bit in the CR1 register.
-        I2C2->CR1 |= (1 << 0); // (Set bit 0)
-    //------------------------------------------------------------------------------------------
+    // // Gyroscope WHO_AM_I read test
+    // int dummy;
+    // gyroscopeTransaction(GYRO_ADDRESS, 1, &dummy, 0, 0x0F);
+    // gyroscopeTransaction(GYRO_ADDRESS, 1, &dummy, 0, GYRO_WHOAMI_REG);
 
+    // int whoAmIValue = 0;
+    // gyroscopeTransaction(GYRO_ADDRESS, 1, &whoAmIValue, 1, 0x0F);
+    // gyroscopeTransaction(GYRO_ADDRESS, 1, &whoAmIValue, 1, GYRO_WHOAMI_REG);
 
-    //5.4---------------------------------------------------------------------------------------
-        // Masks for waiting loops
-        uint32_t TXIS_mask = (1<<1);
-        uint32_t NACKF_mask = (1<<4);
-        uint32_t TC_mask = (1<<6);
-        uint32_t RXNE_mask = (1<<2);
-    //5.4.1 Set the L3GD20 slave address = 0x69
-        //Try something else... I2C2->CR2 |= (1 << 1) | (1 << 4) | (1 << 6) | (1 << 7); // (Set bits 1, 4, 6, and 7)
-        I2C2->CR2 &= ~((0x7F << 16) | (0x3FF << 0)); // Clear register
-        I2C2->CR2 |= (0x69 << 1); // Set SADD to 0x69
+    // if (whoAmIValue == GYRO_WHOAMI_EXPECTED) {
+    //     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_6);
+    //     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_7);
+    //     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_8);
+    //     HAL_GPIO_TogglePin(GPIOC, GPIO_PIN_9);
+    // } else {
+    //     My_HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
+    // }
 
-        // Number of bytes to transmit = 1.
-        I2C2->CR2 |= (1 << 16); // (Set bit 16)
-        // RD_WRN bit to indicate a write operation
-        I2C2->CR2 &= ~(1 << 10); // (Clear bit 10)
-        // Set the START bit
-        I2C2->CR2 |= (1 << 13); // (Set bit 13)
-    //5.4.2 Wait until either of the TXIS or NACKF flags are set.
-        while(!((I2C2->ISR & TXIS_mask) | (I2C2->ISR & NACKF_mask))) {}
-    //5.4.3 Write the address of the “WHO_AM_I” register into the I2C transmit register. (TXDR)
-        I2C2->TXDR = 0xD3;
-    //5.4.4 Wait until the TC (Transfer Complete) flag is set.
-        while(!(I2C2->ISR & TC_mask)) {}
-    //5.4.5 Reload the CR2 register with the same parameters as before, but set the RD_WRN bit to indicate a read operation.
-        // Don’t forget to set the START bit again to perform a I2C restart condition.
-        // Set the L3GD20 slave address = 0x6B
-        //I2C2->CR2 |= (1 << 1) | (1 << 4) | (1 << 6) | (1 << 7); // (Set bits 1, 4, 6, and 7)
+    // Gyroscope CTRL_REG1 setup: enable output
+    int ctrlRegValue = 11;
+    gyroscopeTransaction(GYRO_ADDRESS, 1, &ctrlRegValue, 0, 0x20);
 
-        I2C2->CR2 |= (0x69 << 1); // Set SADD to 0x69
+    int gyroRawData[4];
 
-        // Number of bytes to transmit = 1.
-        I2C2->CR2 |= (1 << 16); // (Set bit 16)
-        // RD_WRN bit to indicate a read operation
-        I2C2->CR2 |= (1 << 10); // (Set bit 10)
-        // Set the START bit
-        I2C2->CR2 |= (1 << 13); // (Set bit 13)
-    //5.4.6 Wait until either of the RXNE or NACKF flags are set.
-        while(!((I2C2->ISR & RXNE_mask) | (I2C2->ISR & NACKF_mask))) {}
-        // Continue if the RXNE flag is set.
-        while(!(I2C2->ISR & RXNE_mask)) {}
-    //5.4.7 Wait until the TC (Transfer Complete) flag is set.
-        while(!(I2C2->ISR & TC_mask)) {}
-    //5.4.8 Check the contents of the RXDR register to see if it matches 0xD3. (expected value of the “WHO_AM_I” register)
-        if(I2C2->RXDR == 0xD3){
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_7, GPIO_PIN_SET);
+    while (1) {
+        HAL_Delay(100);
+        gyroscopeTransaction(GYRO_ADDRESS, 4, gyroRawData, 1, 0x28);
+
+        int16_t xAxis = (gyroRawData[1] << 8) | gyroRawData[0];
+        int16_t yAxis = (gyroRawData[3] << 8) | gyroRawData[2];
+
+        if (yAxis >= 500) {
+            if (xAxis >= 500)
+                activateLED((xAxis > yAxis) ? 9 : 6);
+            else if (xAxis <= -500)
+                activateLED((abs(xAxis) > yAxis) ? 8 : 6);
+        } else if (yAxis <= -500) {
+            if (xAxis <= -500)
+                activateLED((abs(xAxis) > abs(yAxis)) ? 8 : 7);
+            else if (xAxis >= 500)
+                activateLED((xAxis > abs(yAxis)) ? 9 : 7);
         }
-        else{
-            HAL_GPIO_WritePin(GPIOC, GPIO_PIN_6, GPIO_PIN_SET);
-        }
-    //5.4.9 Set the STOP bit in the CR2 register to release the I2C bus.
-        I2C2->CR2 |= (1 << 14); // (Set bit 14)
-    //------------------------------------------------------------------------------------------
+    }
 }
